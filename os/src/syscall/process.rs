@@ -39,7 +39,7 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 }
 
 fn _get_value(id: usize) -> isize {
-    let ptr = id as u8 as *const u8;
+    let ptr = id as *const u8;
     unsafe {ptr.read_volatile() as isize }
 }
 
