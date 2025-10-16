@@ -47,9 +47,42 @@ impl MemorySet {
             areas: Vec::new(),
         }
     }
+
+    ///
+    pub fn page_table_mut(&mut self) -> &mut PageTable {
+        &mut self.page_table
+    }
+
+    ///
+    pub fn page_table(&self) -> &PageTable {
+        &self.page_table
+    }
+
+    ///
+    pub fn remove_map_area(&mut self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) {
+        self.areas.retain(|area| {
+            area.vpn_range.get_end() <= start_vpn || area.vpn_range.get_start() >= end_vpn
+        });
+    }
+
     /// Get the page table token
     pub fn token(&self) -> usize {
         self.page_table.token()
+    }
+
+    /// Assume that no conflicts.
+    pub fn check_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        if self.areas.iter().any(|area| {
+            !(end_va <= area.vpn_range.get_start().into()
+                || start_va >= area.vpn_range.get_end().into())
+        }) {
+            println!("check_framed_area: {:?} -> {:?}", start_va, end_va);
+            -1
+        } else {
+            println!("0check_framed_area: {:?} -> {:?}", start_va, end_va);
+
+            0
+        }
     }
     /// Assume that no conflicts.
     pub fn insert_framed_area(
@@ -58,6 +91,7 @@ impl MemorySet {
         end_va: VirtAddr,
         permission: MapPermission,
     ) {
+        println!("inserted vpn range: {:?} -> {:?}", start_va, end_va);
         self.push(
             MapArea::new(start_va, end_va, MapType::Framed, permission),
             None,
