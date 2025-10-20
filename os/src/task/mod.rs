@@ -21,7 +21,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::loader::get_app_data_by_name;
+use crate::{
+    loader::get_app_data_by_name,
+    mm::{MapPermission, VPNRange, VirtAddr},
+};
 use alloc::sync::Arc;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
@@ -35,6 +38,62 @@ pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
+
+///
+pub fn create_new_map_area(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) -> isize {
+    let task = take_current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let start_vpn = VirtAddr::from(start_va).floor();
+    let end_vpn = VirtAddr::from(end_va).ceil();
+
+    if inner
+        .memory_set
+        .check_framed_area(start_vpn.into(), end_vpn.into())
+        != 0
+    {
+        println!("create_new_map_area 0");
+        return -1;
+    }
+
+    let vpns = VPNRange::new(start_vpn, end_vpn);
+
+    for vpn in vpns {
+        if let Some(pte) = inner.memory_set.translate(vpn.into()) {
+            if pte.is_valid() {
+                println!("create_new_map_area 1");
+
+                return -1;
+            }
+        }
+    }
+
+    inner.memory_set.insert_framed_area(start_va, end_va, perm);
+    0
+}
+
+///
+pub fn unmap_consecutive_area(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    let task = take_current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let start_vpn = VirtAddr::from(start_va).floor();
+    let end_vpn = VirtAddr::from(end_va).ceil();
+    let vpns = VPNRange::new(start_vpn, end_vpn);
+    for vpn in vpns {
+        if let Some(pte) = inner.memory_set.translate(vpn.into()) {
+            if !pte.is_valid() {
+                return -1;
+            }
+            inner.memory_set.page_table_mut().unmap(vpn);
+            println!("unmap vpn: {:?}", vpn);
+        } else {
+            return -1;
+        }
+    }
+    inner.memory_set.remove_map_area(start_vpn, end_vpn);
+
+    0
+}
+
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
