@@ -70,10 +70,13 @@ impl MemorySet {
             !(end_va <= area.vpn_range.get_start().into()
                 || start_va >= area.vpn_range.get_end().into())
         }) {
-            println!("check_framed_area: {:?} -> {:?}", start_va, end_va);
+            println!(
+                "ret = -1, check_framed_area: {:?} -> {:?}",
+                start_va, end_va
+            );
             -1
         } else {
-            println!("0check_framed_area: {:?} -> {:?}", start_va, end_va);
+            println!("ret = 0, check_framed_area: {:?} -> {:?}", start_va, end_va);
 
             0
         }

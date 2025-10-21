@@ -41,7 +41,7 @@ pub use processor::{
 
 ///
 pub fn create_new_map_area(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) -> isize {
-    let task = take_current_task().unwrap();
+    let task = current_task().unwrap();
     let mut inner = task.inner_exclusive_access();
     let start_vpn = VirtAddr::from(start_va).floor();
     let end_vpn = VirtAddr::from(end_va).ceil();
@@ -73,7 +73,7 @@ pub fn create_new_map_area(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermis
 
 ///
 pub fn unmap_consecutive_area(start_va: VirtAddr, end_va: VirtAddr) -> isize {
-    let task = take_current_task().unwrap();
+    let task = current_task().unwrap();
     let mut inner = task.inner_exclusive_access();
     let start_vpn = VirtAddr::from(start_va).floor();
     let end_vpn = VirtAddr::from(end_va).ceil();
