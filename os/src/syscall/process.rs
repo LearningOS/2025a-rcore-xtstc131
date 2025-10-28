@@ -2,12 +2,12 @@
 use alloc::sync::Arc;
 
 use crate::{
-    config::PAGE_SIZE,
+    config::{PAGE_SIZE, PRIO_MAX, PRIO_MIN},
     loader::get_app_data_by_name,
     mm::{translated_byte_buffer, translated_refmut, translated_str, MapPermission, VirtAddr},
     task::{
         add_task, create_new_map_area, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, unmap_consecutive_area,
+        suspend_current_and_run_next, unmap_consecutive_area, TaskControlBlock,
     },
     timer::get_time_us,
 };
@@ -173,21 +173,57 @@ pub fn sys_sbrk(size: i32) -> isize {
     }
 }
 
-/// YOUR JOB: Implement spawn.
-/// HINT: fork + exec =/= spawn
+/// Implement `spawn`.
+/// Hint: fork + exec ≠ spawn.
+/// `spawn` creates a brand-new process directly from an ELF file,
+/// instead of duplicating the current process and then replacing its image.
 pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    // 1) Get the current task and its user page table token
+    //    (used to read data from user space).
+    let parent = current_task().unwrap();
+    let user_token = parent.get_user_token();
+
+    // 2) Copy the null-terminated C-style string `path`
+    //    from user space to kernel space.
+    //    NOTE: The user program must pass a valid, '\0'-terminated string.
+    let path = translated_str(user_token, _path);
+
+    // 3) Load the ELF binary specified by the path.
+    let elf = match get_app_data_by_name(&path) {
+        Some(buf) => buf,
+        None => return -1, // ELF not found
+    };
+
+    // 4) Create a new process and attach it under the parent.
+    if let Some(child) = TaskControlBlock::spawn_from(parent, &elf) {
+        let pid = child.getpid();
+
+        // 5) Add the new process to the ready queue so it can be scheduled.
+        add_task(child);
+
+        pid as isize
+    } else {
+        -1
+    }
 }
 
-// YOUR JOB: Set task priority.
+/// Set the priority of the current task.
+/// Returns the old priority on success, or -1 on failure.
 pub fn sys_set_priority(_prio: isize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    // Check for valid priority range.
+    if _prio < PRIO_MIN || _prio > PRIO_MAX {
+        return -1;
+    }
+
+    // Get the current task and update its priority.
+    let task = match current_task() {
+        Some(t) => t,
+        None => return -1,
+    };
+
+    let mut inner = task.inner_exclusive_access();
+    let old = inner.priority;
+    inner.priority = _prio;
+
+    old
 }

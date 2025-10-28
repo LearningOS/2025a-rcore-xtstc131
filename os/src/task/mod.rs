@@ -23,7 +23,7 @@ mod task;
 
 use crate::{
     loader::get_app_data_by_name,
-    mm::{MapPermission, VPNRange, VirtAddr},
+    mm::{MapPermission, VPNRange, VirtAddr}, task::manager::requeue_after_timeslice,
 };
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -38,7 +38,16 @@ pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
+/// A large constant to reduce quantization error during stride calculations.
+/// `u64` provides sufficient range to avoid overflow in typical use.
+pub const BIG_STRIDE: u64 = 1 << 20;
 
+#[inline]
+/// Compute the `pass` value (stride increment per time slice) from a given priority.
+/// Assumes `prio >= 1` — this constraint is enforced by the caller.
+pub fn pass_from_priority(prio: isize) -> u64 {
+    BIG_STRIDE / (prio as u64)
+}
 ///
 pub fn create_new_map_area(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) -> isize {
     let task = current_task().unwrap();
@@ -61,7 +70,6 @@ pub fn create_new_map_area(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermis
         if let Some(pte) = inner.memory_set.translate(vpn.into()) {
             if pte.is_valid() {
                 println!("create_new_map_area 1");
-
                 return -1;
             }
         }
@@ -106,9 +114,8 @@ pub fn suspend_current_and_run_next() {
     task_inner.task_status = TaskStatus::Ready;
     drop(task_inner);
     // ---- release current PCB
-
-    // push back to ready queue.
-    add_task(task);
+    //push back to ready queue + update stride
+    requeue_after_timeslice(task);
     // jump to scheduling cycle
     schedule(task_cx_ptr);
 }

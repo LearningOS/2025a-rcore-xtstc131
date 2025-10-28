@@ -4,6 +4,7 @@ use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
+use crate::task::pass_from_priority;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -68,6 +69,13 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    ///Program priority level
+    pub priority: isize,
+    ///
+    pub stride: u64, //  0
+    ///
+    pub pass: u64, // = BIG_STRIDE / priority
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +126,9 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    priority: 16,
+                    stride: 0,
+                    pass: pass_from_priority(16),
                 })
             },
         };
@@ -191,6 +202,9 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    priority: parent_inner.priority,
+                    stride: parent_inner.stride,
+                    pass: parent_inner.pass,
                 })
             },
         });
@@ -204,6 +218,74 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// Create a brand-new child process from an ELF image.
+    /// Unlike `fork`, `spawn_from` does not duplicate the parent’s memory;
+    /// it builds a fresh address space directly from the ELF file.
+    pub fn spawn_from(parent: Arc<TaskControlBlock>, elf: &[u8]) -> Option<Arc<TaskControlBlock>> {
+        // 1) Build a new user address space from the ELF
+        //    (including trampoline, trap context, and user stack).
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+
+        // 2) Allocate a PID and a kernel stack.
+        //    Initialize the TaskContext so the scheduler jumps to trap_return on dispatch.
+        let pid_handle = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+
+        // 3) Construct the child TCB.
+        //    Set up parent/child linkage and initialize heap/program_brk positions.
+        let child = Arc::new(TaskControlBlock {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    memory_set,
+                    parent: Some(Arc::downgrade(&parent)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    heap_bottom: user_sp,
+                    program_brk: user_sp,
+                    // stride scheduling fields
+                    priority: 16,
+                    stride: 0,
+                    pass: pass_from_priority(16),
+                })
+            },
+        });
+
+        // 4) Initialize the child’s TrapContext
+        //    (set entry point, user stack pointer, kernel token/stack top, and trap handler).
+        {
+            let inner = child.inner_exclusive_access();
+            let trap_cx = inner.get_trap_cx();
+            *trap_cx = TrapContext::app_init_context(
+                entry_point,
+                user_sp,
+                KERNEL_SPACE.exclusive_access().token(),
+                child.kernel_stack.get_top(),
+                trap_handler as usize,
+            );
+            // Add default or inherited fields here if needed (e.g., cwd, signals, limits)
+        }
+
+        // 5) Link the child into the parent’s child list.
+        {
+            let mut p_inner = parent.inner_exclusive_access();
+            p_inner.children.push(Arc::clone(&child));
+        }
+
+        // The caller (e.g., sys_spawn) is responsible for enqueueing the child with add_task().
+        Some(child)
     }
 
     /// get pid of process
